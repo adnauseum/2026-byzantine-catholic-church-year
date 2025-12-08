@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const bible = require('openbibles');
 
 // Check if filename is provided
 if (process.argv.length < 3) {
@@ -71,8 +72,71 @@ function formatReadingsURL(readings) {
   return `https://www.biblegateway.com/passage/?search=${encodedReadings}&version=RSVCE`;
 }
 
+// Function to remove verse numbers from Bible text
+function removeVerseNumbers(text) {
+  // Remove verse numbers like "1 ", "12 ", "123 " at the start or after spaces
+  return text.replace(/\b\d+\s+/g, '');
+}
+
+// Function to get Bible text for readings
+function getReadingsText(readings) {
+  if (!readings) return [];
+
+  const readingsList = [];
+
+  // Split readings by | to separate Epistle and Gospel readings
+  const readingSets = readings.split('|');
+
+  readingSets.forEach(set => {
+    // Handle semicolon-separated compound references (e.g., "Col 2:8-12; Heb 7:26-8:2")
+    const semicolonParts = set.split(';').map(p => p.trim());
+
+    semicolonParts.forEach(part => {
+      // Split by comma for references that continue from the same book
+      const commaParts = part.split(',').map(p => p.trim());
+
+      let lastBook = '';
+      commaParts.forEach(reading => {
+        try {
+          // Check if reading starts with a number followed by space (like "1 Tim") or a capital letter (book name)
+          const hasBookName =
+            /^[0-9A-Z]/.test(reading) && reading.includes(' ');
+
+          let fullReference = reading;
+          if (!hasBookName && lastBook) {
+            // This is a continuation reference, prepend the last book name
+            fullReference = `${lastBook} ${reading}`;
+          } else if (hasBookName) {
+            // Extract book name for future references
+            const match = reading.match(
+              /^((?:\d\s)?[A-Za-z]+(?:\s[A-Za-z]+)?)\s+/
+            );
+            if (match) {
+              lastBook = match[1];
+            }
+          }
+
+          const text = bible(fullReference, 'en-rsv');
+          if (text) {
+            readingsList.push({
+              reference: fullReference,
+              text: removeVerseNumbers(text),
+            });
+          }
+        } catch (error) {
+          // Silently skip readings that can't be fetched
+        }
+      });
+    });
+  });
+
+  return readingsList;
+}
+
 // Extract month and year from filename
-const monthName = filename.replace('_2026.csv', '').charAt(0).toUpperCase() + filename.replace('_2026.csv', '').slice(1);
+const monthName =
+  filename.replace('_2026.csv', '').charAt(0).toUpperCase() +
+  filename.replace('_2026.csv', '').slice(1);
 const year = '2026';
 
 // Build HTML content
@@ -142,6 +206,28 @@ let htmlContent = `<!DOCTYPE html>
       font-weight: bold;
       color: #8b0000;
     }
+    .readings-section {
+      margin-top: 15px;
+      padding: 15px;
+      background-color: #f5f5f5;
+      border-radius: 4px;
+    }
+    .reading {
+      margin-bottom: 20px;
+    }
+    .reading:last-child {
+      margin-bottom: 0;
+    }
+    .reading-reference {
+      font-weight: bold;
+      color: #8b0000;
+      margin-bottom: 8px;
+    }
+    .reading-text {
+      line-height: 1.7;
+      text-align: justify;
+      color: #333;
+    }
   </style>
 </head>
 <body>
@@ -167,13 +253,13 @@ dataLines.forEach(line => {
   // Format commemorations (replace | with comma)
   const commemorations = dayName.replace(/\|/g, ', ');
 
+  // Get readings text
+  const readingsText = getReadingsText(readings);
+
   // Build HTML for this day
   htmlContent += `  <div class="day-entry">
     <div class="date">${date}</div>
     <div class="commemorations">${commemorations}</div>
-    <div class="readings-link">
-      <span class="label">Readings:</span> <a href="${formatReadingsURL(readings)}" target="_blank">View Readings</a>
-    </div>
 `;
 
   // Add About Today if present
@@ -192,6 +278,22 @@ dataLines.forEach(line => {
 `;
   }
 
+  // Add readings section with text
+  if (readingsText.length > 0) {
+    htmlContent += `    <div class="readings-section">
+      <div class="label">Readings:</div>
+`;
+    readingsText.forEach(reading => {
+      htmlContent += `      <div class="reading">
+        <div class="reading-reference">${reading.reference}</div>
+        <div class="reading-text">${reading.text}</div>
+      </div>
+`;
+    });
+    htmlContent += `    </div>
+`;
+  }
+
   htmlContent += `  </div>
 `;
 });
@@ -204,7 +306,7 @@ htmlContent += `</body>
 // Create html directory if it doesn't exist
 const htmlDir = path.join(__dirname, 'html');
 if (!fs.existsSync(htmlDir)) {
-  fs.mkdirSync(htmlDir, { recursive: true });
+  fs.mkdirSync(htmlDir, {recursive: true});
 }
 
 // Write output to file in html directory
